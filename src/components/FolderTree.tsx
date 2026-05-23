@@ -10,7 +10,8 @@ import type { CSSProperties } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { NodeRendererProps, RowRendererProps } from 'react-arborist'
 import { Tree, type NodeApi, type TreeApi } from 'react-arborist'
-import { bridgeAPI } from '../shared/bridge'
+import type { MediaBackend } from '../shared/mediaBackend'
+import { BrowserMediaStore } from '../shared/browserMedia'
 import type { ImageMarkLevel } from '../shared/markLevel'
 import type { ChildFolderInfo, MediaListItem } from '../shared/types'
 
@@ -50,7 +51,6 @@ function basenameOnly(abs: string): string {
   return i >= 0 ? norm.slice(i + 1) : norm
 }
 
-/** Always show a short folder label, never the full path. */
 function folderDisplayName(path: string, rawName?: string): string {
   const trimmed = rawName?.trim()
   if (trimmed && trimmed !== path && !trimmed.includes('/') && !trimmed.includes('\\')) {
@@ -223,7 +223,7 @@ function DirectoryNode({
 
 type Props = {
   roots: string[]
-  browserImages: MediaListItem[]
+  browserStore: BrowserMediaStore | null
   treeSelectionPath: string | null
   expandImportedRoot: { path: string; nonce: number } | null
   imageMarks: Record<string, ImageMarkLevel>
@@ -234,13 +234,13 @@ type Props = {
   onToggleImageSelect: (path: string) => void
   onRemoveRoot: (rootPath: string) => void
   onImagesDiscovered: (paths: string[]) => void
-  bridgeReady: boolean
+  media: MediaBackend
 }
 
-async function loadFolderChildren(folderPath: string): Promise<TreeNode[]> {
+async function loadFolderChildren(media: MediaBackend, folderPath: string): Promise<TreeNode[]> {
   const [kids, images] = await Promise.all([
-    bridgeAPI.listChildFolders(folderPath),
-    bridgeAPI.mediaListDirect(folderPath),
+    media.listChildFolders(folderPath),
+    media.mediaListDirect(folderPath),
   ])
   const subfolders: TreeNode[] = kids.map((k: ChildFolderInfo) => toFolderNode(k.absolutePath, k.name))
   const files: TreeNode[] = images.map(toImageNode)
@@ -249,7 +249,7 @@ async function loadFolderChildren(folderPath: string): Promise<TreeNode[]> {
 
 export function FolderTree({
   roots,
-  browserImages,
+  browserStore,
   treeSelectionPath,
   expandImportedRoot,
   imageMarks,
@@ -260,7 +260,7 @@ export function FolderTree({
   onToggleImageSelect,
   onRemoveRoot,
   onImagesDiscovered,
-  bridgeReady,
+  media,
 }: Props) {
   const { token } = theme.useToken()
   const treeRef = useRef<TreeApi<TreeNode>>(null)
@@ -278,40 +278,21 @@ export function FolderTree({
     setFolderCounts({})
 
     if (roots.length > 0) {
-      setTreeData(roots.map((r) => toFolderNode(r)))
-      return
-    }
-
-    if (browserImages.length > 0) {
-      setTreeData([
-        {
-          id: '__browser__',
-          name: 'Imported Photos',
-          path: '__browser__',
-          kind: 'folder',
-          children: browserImages.map(toImageNode),
-        },
-      ])
-      loadedRef.current.add('__browser__')
-      queueMicrotask(() => treeRef.current?.open('__browser__'))
+      setTreeData(
+        roots.map((r) => toFolderNode(r, browserStore?.getRootLabel(r) ?? undefined)),
+      )
       return
     }
 
     setTreeData([])
-  }, [roots, browserImages])
+  }, [roots, browserStore])
 
   useEffect(() => {
-    if (browserImages.length > 0 && roots.length === 0) {
-      onImagesDiscovered(browserImages.map((m) => m.absolutePath))
-    }
-  }, [browserImages, roots.length, onImagesDiscovered])
-
-  useEffect(() => {
-    if (!bridgeReady || treeData.length === 0) return
+    if (treeData.length === 0) return
     const paths = collectFolderPaths(treeData)
     const missing = paths.filter((p) => !(p in folderCountsRef.current))
     if (missing.length === 0) return
-    void bridgeAPI
+    void media
       .mediaCountBatch(missing)
       .then((batch) => {
         for (const p of missing) folderCountsRef.current[p] = batch[p] ?? 0
@@ -321,7 +302,7 @@ export function FolderTree({
         for (const p of missing) folderCountsRef.current[p] = 0
         setFolderCounts({ ...folderCountsRef.current })
       })
-  }, [treeData, bridgeReady])
+  }, [treeData, media])
 
   const applyLoadedChildren = useCallback(
     (folderPath: string, children: TreeNode[]) => {
@@ -334,14 +315,14 @@ export function FolderTree({
   )
 
   useEffect(() => {
-    if (!expandImportedRoot || !bridgeReady) return
+    if (!expandImportedRoot) return
     const { path } = expandImportedRoot
     if (!roots.includes(path)) return
 
     const run = async () => {
       if (!loadedRef.current.has(path)) {
         try {
-          applyLoadedChildren(path, await loadFolderChildren(path))
+          applyLoadedChildren(path, await loadFolderChildren(media, path))
         } catch {
           return
         }
@@ -349,7 +330,7 @@ export function FolderTree({
       queueMicrotask(() => treeRef.current?.open(path))
     }
     void run()
-  }, [expandImportedRoot?.path, expandImportedRoot?.nonce, bridgeReady, roots, applyLoadedChildren])
+  }, [expandImportedRoot?.path, expandImportedRoot?.nonce, roots, applyLoadedChildren, media])
 
   useLayoutEffect(() => {
     const target = treeData.length === 0 ? wrapRef.current : panelRef.current
@@ -365,8 +346,6 @@ export function FolderTree({
 
   const handleToggle = useCallback(
     (id: string) => {
-      if (id === '__browser__') return
-      if (!bridgeReady) return
       const node = treeRef.current?.get(id)
       if (node?.data.kind !== 'folder') return
 
@@ -374,12 +353,12 @@ export function FolderTree({
         const api = treeRef.current
         if (!api?.isOpen(id)) return
         if (loadedRef.current.has(id)) return
-        void loadFolderChildren(id)
+        void loadFolderChildren(media, id)
           .then((children) => applyLoadedChildren(id, children))
           .catch(() => {})
       })
     },
-    [bridgeReady, applyLoadedChildren],
+    [media, applyLoadedChildren],
   )
 
   const DirectoryNodeWithExtras = useCallback(
@@ -424,7 +403,7 @@ export function FolderTree({
               {countLabel}
             </span>
           ) : null}
-          {isRootRow && node.data.path !== '__browser__' ? (
+          {isRootRow ? (
             <button
               type="button"
               className="folder-tree-root-remove"
@@ -478,13 +457,8 @@ export function FolderTree({
                 return
               }
               onSelectFolder(n.path)
-              if (n.path === '__browser__') {
-                queueMicrotask(() => treeRef.current?.open(n.path))
-                return
-              }
-              if (!bridgeReady) return
               if (!loadedRef.current.has(n.path)) {
-                void loadFolderChildren(n.path)
+                void loadFolderChildren(media, n.path)
                   .then((children) => {
                     applyLoadedChildren(n.path, children)
                     queueMicrotask(() => treeRef.current?.open(n.path))

@@ -8,7 +8,7 @@
 |------|------|
 | **前端** (`src/`) | Vite + React，左右分栏；左侧栏 UI 迁移自 [Widmax](https://github.com) 的文件夹树设计 |
 | **本地 Bridge** (`server/`) | Node.js + Express，负责系统文件夹选择、读盘、保存/导出标注 JSON |
-| **Vercel** | 仅托管静态前端；访客可用「Import Photos」在浏览器内标注（数据存于 localStorage） |
+| **Vercel** | 托管静态前端；与本地相同的 UI，通过浏览器「Import Folder」选目录标注（标注存于 localStorage） |
 | **GitHub** | 代码仓库 |
 
 ```
@@ -58,22 +58,31 @@ npm run dev
 
 坐标为**原图像素坐标**，便于后续生成 mask 或 COCO 风格导出。
 
-文件夹导出：`POST /api/annotations/export` → 下载 JSON，供训练流水线消费。
+文件夹导出：`POST /api/annotations/export` → 下载 JSON，供训练流水线消费。每张图含 `mark` 字段：`P0` / `P1` 来自标注形状；无标注时为 `clear`（`shapes` 为空数组）。
+
+```json
+{
+  "imagePath": "/path/to/photo-clear.jpg",
+  "basename": "photo-clear.jpg",
+  "mark": "clear",
+  "shapes": []
+}
+```
 
 ## 部署到 Vercel
 
 1. 将本仓库推送到 **GitHub**
 2. 在 [vercel.com](https://vercel.com) 导入该仓库
 3. Framework Preset 选 **Vite**，Build Command `npm run build`，Output `dist`
-4. 部署完成后，分享 URL 即可给他人使用（浏览器导入照片模式）
+4. 部署完成后，分享 URL 即可使用（与本地相同的界面；在浏览器中选择文件夹导入）
 
-本地文件夹导入、系统选目录、持久化到磁盘：**需要用户本机运行 bridge**：
+**本地增强**：运行 bridge 可将标注持久化到磁盘，并使用系统文件夹选择器：
 
 ```bash
-npm run start:bridge
+npm run dev
 ```
 
-并在同一台机器用 `npm run dev:web` 或配置 `VITE_BRIDGE_URL=http://127.0.0.1:3921` 构建。
+生产静态站会自动检测 bridge；若本机同时运行 `npm run start:bridge` 并设置 `VITE_BRIDGE_URL`，也可在部署页连接本地 bridge。
 
 ## 环境变量
 

@@ -1,10 +1,16 @@
 import { ConfigProvider, theme } from 'antd'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnnotationCanvas } from './components/AnnotationCanvas'
 import { Sidebar } from './components/Sidebar'
 import { bridgeAPI, bridgeAvailable } from './shared/bridge'
-import { markLevelFromShapes, type ImageMarkLevel } from './shared/markLevel'
-import type { AnnotationShape, AnnotTool, MediaListItem, WorkspaceImage } from './shared/types'
+import { BrowserMediaStore, isBrowserFsPath } from './shared/browserMedia'
+import {
+  createBridgeMediaBackend,
+  createBrowserMediaBackend,
+  type MediaBackend,
+} from './shared/mediaBackend'
+import { markLevelFromShapes, toExportedImage, type ImageMarkLevel } from './shared/markLevel'
+import type { AnnotationShape, AnnotTool, WorkspaceImage } from './shared/types'
 import { normalizeShapes } from './shared/types'
 
 function basenameFromPath(abs: string): string {
@@ -46,14 +52,12 @@ function saveBrowserAnnotations(map: Record<string, AnnotationShape[]>) {
 
 export default function App() {
   const [bridgeReady, setBridgeReady] = useState(false)
-  const [bridgeHint, setBridgeHint] = useState<string | null>(null)
   const [folders, setFolders] = useState<string[]>([])
   const [treeSelectionPath, setTreeSelectionPath] = useState<string | null>(null)
   const [browseFolderPath, setBrowseFolderPath] = useState<string | null>(null)
   const [expandImportedRoot, setExpandImportedRoot] = useState<{ path: string; nonce: number } | null>(
     null,
   )
-  const [browserImages] = useState<MediaListItem[]>([])
   const [activeImage, setActiveImage] = useState<WorkspaceImage | null>(null)
   const [shapes, setShapes] = useState<AnnotationShape[]>([])
   const [activeLevel, setActiveLevel] = useState<'P0' | 'P1'>('P0')
@@ -63,21 +67,24 @@ export default function App() {
   const [selectionMode, setSelectionMode] = useState(false)
   const [currentFolderImagePaths, setCurrentFolderImagePaths] = useState<string[]>([])
   const [status, setStatus] = useState('就绪')
+  const browserStoreRef = useRef(new BrowserMediaStore())
   const browserAnnotRef = useRef(loadBrowserAnnotations())
-  const browserUrlMapRef = useRef<Map<string, string>>(new Map())
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const media: MediaBackend = useMemo(
+    () =>
+      bridgeReady
+        ? createBridgeMediaBackend()
+        : createBrowserMediaBackend(browserStoreRef.current),
+    [bridgeReady],
+  )
 
   useEffect(() => {
     void bridgeAvailable().then((ok) => {
       setBridgeReady(ok)
-      if (ok) {
-        setBridgeHint(null)
-        void bridgeAPI.foldersGet().then(setFolders)
-      } else {
-        setBridgeHint(
-          '未连接本地 Node bridge。请运行 npm run dev 以使用完整功能。',
-        )
-      }
+      void (ok ? createBridgeMediaBackend() : createBrowserMediaBackend(browserStoreRef.current))
+        .getRoots()
+        .then(setFolders)
     })
   }, [])
 
@@ -87,12 +94,11 @@ export default function App() {
       const updates: Record<string, ImageMarkLevel> = {}
       await Promise.all(
         paths.map(async (p) => {
-          if (p.startsWith('browser:')) {
+          if (!media.isBridge || isBrowserFsPath(p)) {
             const level = markLevelFromShapes(browserAnnotRef.current[p] ?? [])
             if (level) updates[p] = level
             return
           }
-          if (!bridgeReady) return
           try {
             const doc = await bridgeAPI.getAnnotations(p)
             const level = markLevelFromShapes(normalizeShapes(doc))
@@ -111,7 +117,7 @@ export default function App() {
         return next
       })
     },
-    [bridgeReady],
+    [media.isBridge],
   )
 
   const onImagesDiscovered = useCallback(
@@ -131,44 +137,50 @@ export default function App() {
     })
   }, [])
 
-  const loadShapesForImage = useCallback(async (img: WorkspaceImage) => {
-    if (img.source === 'bridge') {
-      try {
-        const doc = await bridgeAPI.getAnnotations(img.absolutePath)
-        setShapes(normalizeShapes(doc))
-      } catch {
-        setShapes([])
-      }
-    } else {
-      setShapes(browserAnnotRef.current[img.id] ?? [])
-    }
-  }, [])
-
-  const scheduleSave = useCallback((img: WorkspaceImage, nextShapes: AnnotationShape[]) => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => {
-      void (async () => {
-        if (img.source === 'bridge') {
-          try {
-            await bridgeAPI.saveAnnotations({
-              imagePath: img.absolutePath,
-              shapes: nextShapes,
-              version: 1,
-            })
-            setStatus('已保存')
-            applyImageMark(img.absolutePath, nextShapes)
-          } catch {
-            setStatus('保存失败')
-          }
-        } else {
-          browserAnnotRef.current[img.id] = nextShapes
-          saveBrowserAnnotations(browserAnnotRef.current)
-          applyImageMark(img.id, nextShapes)
-          setStatus('已保存（浏览器本地）')
+  const loadShapesForImage = useCallback(
+    async (img: WorkspaceImage) => {
+      if (img.source === 'bridge') {
+        try {
+          const doc = await bridgeAPI.getAnnotations(img.absolutePath)
+          setShapes(normalizeShapes(doc))
+        } catch {
+          setShapes([])
         }
-      })()
-    }, 400)
-  }, [applyImageMark])
+      } else {
+        setShapes(browserAnnotRef.current[img.id] ?? [])
+      }
+    },
+    [],
+  )
+
+  const scheduleSave = useCallback(
+    (img: WorkspaceImage, nextShapes: AnnotationShape[]) => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = setTimeout(() => {
+        void (async () => {
+          if (img.source === 'bridge') {
+            try {
+              await bridgeAPI.saveAnnotations({
+                imagePath: img.absolutePath,
+                shapes: nextShapes,
+                version: 1,
+              })
+              setStatus('已保存')
+              applyImageMark(img.absolutePath, nextShapes)
+            } catch {
+              setStatus('保存失败')
+            }
+          } else {
+            browserAnnotRef.current[img.id] = nextShapes
+            saveBrowserAnnotations(browserAnnotRef.current)
+            applyImageMark(img.id, nextShapes)
+            setStatus(media.isBridge ? '已保存（浏览器本地）' : '已保存')
+          }
+        })()
+      }, 400)
+    },
+    [applyImageMark, media.isBridge],
+  )
 
   const handleShapesChange = useCallback(
     (next: AnnotationShape[]) => {
@@ -197,6 +209,27 @@ export default function App() {
     [loadShapesForImage],
   )
 
+  const selectLocalImage = useCallback(
+    (virtualPath: string) => {
+      const url = media.mediaFileUrl(virtualPath)
+      if (!url) {
+        setStatus('请重新导入该文件夹')
+        return
+      }
+      const img: WorkspaceImage = {
+        source: 'browser',
+        id: virtualPath,
+        name: basenameFromPath(virtualPath),
+        objectUrl: url,
+      }
+      setTreeSelectionPath(virtualPath)
+      setActiveImage(img)
+      void loadShapesForImage(img)
+      setStatus(img.name)
+    },
+    [loadShapesForImage, media],
+  )
+
   const handleTreeSelectFolder = useCallback((path: string) => {
     setTreeSelectionPath(path)
     setBrowseFolderPath(path)
@@ -209,18 +242,10 @@ export default function App() {
       setCurrentFolderImagePaths([])
       return
     }
-    if (browseFolderPath === '__browser__') {
-      setCurrentFolderImagePaths(browserImages.map((m) => m.absolutePath))
-      return
-    }
-    if (!bridgeReady) {
-      setCurrentFolderImagePaths([])
-      return
-    }
-    void bridgeAPI.mediaList(browseFolderPath).then((list) => {
+    void media.mediaList(browseFolderPath).then((list) => {
       setCurrentFolderImagePaths(list.map((m) => m.absolutePath))
     })
-  }, [browseFolderPath, bridgeReady, browserImages])
+  }, [browseFolderPath, media])
 
   const handleSelectAll = useCallback(() => {
     setSelectionMode(true)
@@ -248,61 +273,46 @@ export default function App() {
     setStatus('已取消选择')
   }, [])
 
-  const handleExportJson = useCallback(async () => {
-    if (!browseFolderPath) return
-
-    if (browseFolderPath === '__browser__') {
-      const images = browserImages.map((m) => ({
-        imagePath: m.absolutePath,
-        basename: m.basename,
-        shapes: browserAnnotRef.current[m.absolutePath] ?? [],
-      }))
-    const bundle = images.filter((img) => selectedPaths.has(img.imagePath))
-    if (bundle.length === 0) return
-    const blob = new Blob(
-      [
-        JSON.stringify(
-          {
-            folderPath: '__browser__',
-            exportedAt: new Date().toISOString(),
-            images: bundle,
-          },
-          null,
-          2,
-        ),
-      ],
-      { type: 'application/json' },
-    )
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = `motion-blur-annotations-${Date.now()}.json`
-      a.click()
-      URL.revokeObjectURL(a.href)
-      setStatus(`已导出 ${bundle.length} 张`)
-      return
-    }
-
-    if (!bridgeReady) return
-    const data = await bridgeAPI.exportFolder(browseFolderPath)
-    const parsed = data as { images?: { imagePath: string; basename: string; shapes: unknown[] }[] }
-    const images = parsed.images ?? []
-    const bundle = images.filter((img) => selectedPaths.has(img.imagePath))
-    if (bundle.length === 0) return
-    const blob = new Blob(
-      [JSON.stringify({ ...parsed, images: bundle, exportedAt: new Date().toISOString() }, null, 2)],
-      { type: 'application/json' },
-    )
+  const downloadJson = useCallback((payload: unknown, count: number) => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
     a.download = `motion-blur-annotations-${Date.now()}.json`
     a.click()
     URL.revokeObjectURL(a.href)
-    setStatus(`已导出 ${bundle.length} 张`)
-  }, [browseFolderPath, bridgeReady, browserImages, selectedPaths])
+    setStatus(`已导出 ${count} 张`)
+  }, [])
 
-  const exportReady = Boolean(
-    browseFolderPath && (browseFolderPath === '__browser__' || bridgeReady),
-  )
+  const handleExportJson = useCallback(async () => {
+    if (!browseFolderPath) return
+
+    if (media.isBridge) {
+      const data = await bridgeAPI.exportFolder(browseFolderPath)
+      const parsed = data as { images?: ReturnType<typeof toExportedImage>[]; folderPath?: string }
+      const bundle = (parsed.images ?? []).filter((img) => selectedPaths.has(img.imagePath))
+      if (bundle.length === 0) return
+      downloadJson({ ...parsed, images: bundle, exportedAt: new Date().toISOString() }, bundle.length)
+      return
+    }
+
+    const list = await media.mediaList(browseFolderPath)
+    const bundle = list
+      .filter((m) => selectedPaths.has(m.absolutePath))
+      .map((m) =>
+        toExportedImage(m.absolutePath, m.basename, browserAnnotRef.current[m.absolutePath] ?? []),
+      )
+    if (bundle.length === 0) return
+    downloadJson(
+      {
+        folderPath: browseFolderPath,
+        exportedAt: new Date().toISOString(),
+        images: bundle,
+      },
+      bundle.length,
+    )
+  }, [browseFolderPath, media, selectedPaths, downloadJson])
+
+  const exportReady = Boolean(browseFolderPath)
 
   const imageUrl =
     activeImage?.source === 'bridge'
@@ -311,23 +321,12 @@ export default function App() {
         ? activeImage.objectUrl
         : null
 
-  const selectBrowserImage = useCallback(
-    (id: string) => {
-      const item = browserImages.find((m) => m.absolutePath === id)
-      const objectUrl = browserUrlMapRef.current.get(id)
-      if (!item || !objectUrl) return
-      const img: WorkspaceImage = {
-        source: 'browser',
-        id,
-        name: item.basename,
-        objectUrl,
-      }
-      setTreeSelectionPath(id)
-      setActiveImage(img)
-      void loadShapesForImage(img)
-      setStatus(item.basename)
+  const handleSelectImage = useCallback(
+    (path: string) => {
+      if (media.isBridge && !isBrowserFsPath(path)) selectBridgeImage(path)
+      else selectLocalImage(path)
     },
-    [browserImages, loadShapesForImage],
+    [media.isBridge, selectBridgeImage, selectLocalImage],
   )
 
   return (
@@ -340,16 +339,15 @@ export default function App() {
       <div className="app-shell">
         <Sidebar
           folders={folders}
-          browserImages={browserImages}
           treeSelectionPath={treeSelectionPath}
           expandImportedRoot={expandImportedRoot}
-          bridgeReady={bridgeReady}
-          bridgeHint={bridgeHint}
           imageMarks={imageMarks}
           selectedPaths={selectedPaths}
           selectionMode={selectionMode}
           browseFolderPath={browseFolderPath}
           exportReady={exportReady}
+          browserStore={bridgeReady ? null : browserStoreRef.current}
+          media={media}
           onSelectAll={handleSelectAll}
           onEnterSelectionMode={handleEnterSelectionMode}
           onToggleImageSelect={handleToggleImageSelect}
@@ -358,10 +356,10 @@ export default function App() {
           onTreeSelectFolder={handleTreeSelectFolder}
           onImagesDiscovered={onImagesDiscovered}
           onImportFolder={async () => {
-            const res = await bridgeAPI.foldersPick()
+            const res = await media.pickFolder()
             if (!res) return
             setFolders(res.roots)
-            const kids = await bridgeAPI.listChildFolders(res.added)
+            const kids = await media.listChildFolders(res.added)
             if (kids.length > 0) {
               setTreeSelectionPath(null)
               setBrowseFolderPath(null)
@@ -371,18 +369,21 @@ export default function App() {
               setTreeSelectionPath(res.added)
               setBrowseFolderPath(res.added)
             }
+            setStatus('已导入文件夹')
           }}
           onRemove={async (p) => {
-            const next = await bridgeAPI.foldersRemove(p)
+            const next = await media.removeRoot(p)
             setFolders(next)
             setExpandImportedRoot(null)
             if (pathIsUnderAncestor(browseFolderPath, p)) setBrowseFolderPath(null)
             if (pathIsUnderAncestor(treeSelectionPath, p)) setTreeSelectionPath(null)
+            if (activeImage) {
+              const activePath =
+                activeImage.source === 'bridge' ? activeImage.absolutePath : activeImage.id
+              if (pathIsUnderAncestor(activePath, p)) setActiveImage(null)
+            }
           }}
-          onSelectImage={(path) => {
-            if (path.startsWith('browser:')) selectBrowserImage(path)
-            else selectBridgeImage(path)
-          }}
+          onSelectImage={handleSelectImage}
         />
         <div className="main-column">
           <div className="workspace">
@@ -445,8 +446,7 @@ export default function App() {
                 />
               ) : (
                 <p className="workspace-empty">
-                  在左侧导入文件夹或照片，选择一张照片后使用折线或框选工具，配合 P0（红）/ P1（橙）标注运动模糊区域。折线：单击添加锚点，点击起点闭合区域。
-                  标注会自动保存；本地 bridge 可将结果导出为 JSON 供 QLoRA 训练流水线使用。
+                  点击左侧 Import Folder 导入文件夹，选择照片后用折线或框选工具标注 P0（红）/ P1（橙）运动模糊区域。折线：单击添加锚点，点击起点闭合。标注会自动保存，选中文件后可导出 JSON。
                 </p>
               )}
             </div>

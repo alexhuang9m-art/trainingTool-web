@@ -1,19 +1,20 @@
 import { useEffect, useState } from 'react'
 import { FolderTree } from './FolderTree'
+import type { BrowserMediaStore } from '../shared/browserMedia'
+import type { MediaBackend } from '../shared/mediaBackend'
 import type { ImageMarkLevel } from '../shared/markLevel'
 
 type Props = {
   folders: string[]
-  browserImages: { absolutePath: string; basename: string; kind: 'image' }[]
   treeSelectionPath: string | null
   expandImportedRoot: { path: string; nonce: number } | null
-  bridgeReady: boolean
-  bridgeHint: string | null
   imageMarks: Record<string, ImageMarkLevel>
   selectedPaths: Set<string>
   selectionMode: boolean
   browseFolderPath: string | null
   exportReady: boolean
+  browserStore: BrowserMediaStore | null
+  media: MediaBackend
   onTreeSelectFolder: (path: string) => void
   onSelectImage: (path: string) => void
   onImportFolder: () => void
@@ -28,16 +29,15 @@ type Props = {
 
 export function Sidebar({
   folders,
-  browserImages,
   treeSelectionPath,
   expandImportedRoot,
-  bridgeReady,
-  bridgeHint,
   imageMarks,
   selectedPaths,
   selectionMode,
   browseFolderPath,
   exportReady,
+  browserStore,
+  media,
   onTreeSelectFolder,
   onSelectImage,
   onImportFolder,
@@ -72,21 +72,17 @@ export function Sidebar({
         <button
           type="button"
           className="import-btn import-btn--primary"
-          disabled={!bridgeReady}
-          title={bridgeReady ? undefined : '请先启动本地 bridge：npm run dev:bridge'}
           onClick={() => void onImportFolder()}
         >
           <span className="import-icon">+</span> Import Folder
         </button>
       </div>
 
-      {bridgeHint ? <p className="bridge-hint">{bridgeHint}</p> : null}
-
       <div className="sidebar-tree-section">
         <div className="sidebar-heading">文件夹</div>
         <FolderTree
           roots={folders}
-          browserImages={browserImages}
+          browserStore={browserStore}
           treeSelectionPath={treeSelectionPath}
           expandImportedRoot={expandImportedRoot}
           imageMarks={imageMarks}
@@ -97,7 +93,7 @@ export function Sidebar({
           onToggleImageSelect={onToggleImageSelect}
           onRemoveRoot={onRemove}
           onImagesDiscovered={onImagesDiscovered}
-          bridgeReady={bridgeReady}
+          media={media}
         />
       </div>
 

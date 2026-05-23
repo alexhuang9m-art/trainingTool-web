@@ -313,6 +313,18 @@ app.put('/api/annotations', async (req, res) => {
   res.json({ ok: true })
 })
 
+function exportMarkFromShapes(shapes) {
+  let hasP0 = false
+  let hasP1 = false
+  for (const s of shapes) {
+    if (s.level === 'P0') hasP0 = true
+    if (s.level === 'P1') hasP1 = true
+  }
+  if (hasP0) return 'P0'
+  if (hasP1) return 'P1'
+  return 'clear'
+}
+
 app.post('/api/annotations/export', async (req, res) => {
   const folderPath = typeof req.body?.folderPath === 'string' ? req.body.folderPath : ''
   const roots = await readFolders()
@@ -341,6 +353,7 @@ app.post('/api/annotations/export', async (req, res) => {
     bundle.push({
       imagePath: img.absolutePath,
       basename: img.basename,
+      mark: exportMarkFromShapes(shapes),
       shapes,
     })
   }
