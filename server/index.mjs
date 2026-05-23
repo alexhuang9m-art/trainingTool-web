@@ -140,6 +140,27 @@ async function scanImages(rootDir) {
   return items
 }
 
+async function scanImagesDirect(dirPath) {
+  const normalized = normalize(dirPath)
+  if (!existsSync(normalized)) return []
+  let entries
+  try {
+    entries = await fs.readdir(normalized, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const items = []
+  for (const ent of entries) {
+    if (!ent.isFile()) continue
+    const ext = path.extname(ent.name).toLowerCase()
+    if (!IMAGE_EXTENSIONS.has(ext)) continue
+    const absolutePath = normalize(path.join(normalized, ent.name))
+    items.push({ absolutePath, basename: ent.name, kind: 'image' })
+  }
+  items.sort((a, b) => a.basename.localeCompare(b.basename, undefined, { sensitivity: 'base' }))
+  return items
+}
+
 function annotationFileFor(imagePath) {
   const key = Buffer.from(imagePath).toString('base64url')
   return path.join(annotationsDir(), `${key}.json`)
@@ -242,6 +263,16 @@ app.get('/api/media/list', async (req, res) => {
   res.json(await scanImages(folderPath))
 })
 
+app.get('/api/media/list-direct', async (req, res) => {
+  const folderPath = typeof req.query.path === 'string' ? req.query.path : ''
+  const roots = await readFolders()
+  if (!isPathUnderRoots(folderPath, roots)) {
+    res.status(403).json({ error: 'forbidden' })
+    return
+  }
+  res.json(await scanImagesDirect(folderPath))
+})
+
 app.get('/api/media/file', async (req, res) => {
   const abs = typeof req.query.path === 'string' ? req.query.path : ''
   const roots = await readFolders()
@@ -264,7 +295,7 @@ app.get('/api/annotations', async (req, res) => {
     const raw = await fs.readFile(file, 'utf8')
     res.type('json').send(raw)
   } catch {
-    res.json({ imagePath, strokes: [], version: 1 })
+    res.json({ imagePath, shapes: [], version: 1 })
   }
 })
 
@@ -282,6 +313,18 @@ app.put('/api/annotations', async (req, res) => {
   res.json({ ok: true })
 })
 
+function exportMarkFromShapes(shapes) {
+  let hasP0 = false
+  let hasP1 = false
+  for (const s of shapes) {
+    if (s.level === 'P0') hasP0 = true
+    if (s.level === 'P1') hasP1 = true
+  }
+  if (hasP0) return 'P0'
+  if (hasP1) return 'P1'
+  return 'clear'
+}
+
 app.post('/api/annotations/export', async (req, res) => {
   const folderPath = typeof req.body?.folderPath === 'string' ? req.body.folderPath : ''
   const roots = await readFolders()
@@ -293,18 +336,25 @@ app.post('/api/annotations/export', async (req, res) => {
   const bundle = []
   for (const img of images) {
     const file = annotationFileFor(img.absolutePath)
-    let strokes = []
+    let shapes = []
     try {
       const raw = await fs.readFile(file, 'utf8')
       const parsed = JSON.parse(raw)
-      strokes = Array.isArray(parsed.strokes) ? parsed.strokes : []
+      if (Array.isArray(parsed.shapes)) shapes = parsed.shapes
+      else if (Array.isArray(parsed.strokes)) {
+        shapes = parsed.strokes.map((s) => ({
+          ...s,
+          kind: s.kind === 'polyline' ? 'polyline' : 'brush',
+        }))
+      }
     } catch {
       /* empty */
     }
     bundle.push({
       imagePath: img.absolutePath,
       basename: img.basename,
-      strokes,
+      mark: exportMarkFromShapes(shapes),
+      shapes,
     })
   }
   res.json({ folderPath, exportedAt: new Date().toISOString(), images: bundle })

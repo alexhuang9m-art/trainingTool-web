@@ -1,5 +1,5 @@
 import type {
-  AnnotationStroke,
+  AnnotationShape,
   FoldersPickResult,
   ImageAnnotation,
   MediaCountBatch,
@@ -44,6 +44,8 @@ export const bridgeAPI = {
     ),
   mediaList: (folderPath: string) =>
     bridgeFetch<MediaListItem[]>(`/api/media/list?path=${encodeURIComponent(folderPath)}`),
+  mediaListDirect: (folderPath: string) =>
+    bridgeFetch<MediaListItem[]>(`/api/media/list-direct?path=${encodeURIComponent(folderPath)}`),
   mediaFileUrl: (absolutePath: string) => {
     const base = bridgeBase()
     const q = `/api/media/file?path=${encodeURIComponent(absolutePath)}`
@@ -53,7 +55,7 @@ export const bridgeAPI = {
     bridgeFetch<ImageAnnotation>(`/api/annotations?path=${encodeURIComponent(imagePath)}`),
   saveAnnotations: (payload: {
     imagePath: string
-    strokes: AnnotationStroke[]
+    shapes: AnnotationShape[]
     version: 1
   }) =>
     bridgeFetch<{ ok: boolean }>('/api/annotations', {
