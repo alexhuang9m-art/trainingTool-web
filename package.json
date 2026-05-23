@@ -1,0 +1,35 @@
+{
+  "name": "training-tool-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Web photo annotation for motion blur (QLoRA / fine-tuning)",
+  "scripts": {
+    "dev": "concurrently -n web,bridge -c blue,green \"vite\" \"node server/index.mjs\"",
+    "dev:web": "vite",
+    "dev:bridge": "node server/index.mjs",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "start:bridge": "node server/index.mjs"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^6.2.3",
+    "antd": "^6.3.7",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "react": "^19.2.6",
+    "react-arborist": "^3.6.1",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^25.7.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.12"
+  }
+}
