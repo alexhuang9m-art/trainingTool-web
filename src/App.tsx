@@ -80,11 +80,27 @@ export default function App() {
   )
 
   useEffect(() => {
-    void bridgeAvailable().then((ok) => {
+    void bridgeAvailable().then(async (ok) => {
       setBridgeReady(ok)
-      void (ok ? createBridgeMediaBackend() : createBrowserMediaBackend(browserStoreRef.current))
-        .getRoots()
-        .then(setFolders)
+      if (ok) {
+        setFolders(await bridgeAPI.foldersGet())
+        return
+      }
+      await browserStoreRef.current.hydrate()
+      const roots = browserStoreRef.current.getRoots()
+      setFolders(roots)
+      const paths: string[] = []
+      for (const r of roots) {
+        for (const m of browserStoreRef.current.mediaList(r)) paths.push(m.absolutePath)
+      }
+      if (paths.length) {
+        const marks: Record<string, ImageMarkLevel> = {}
+        for (const p of paths) {
+          const level = markLevelFromShapes(browserAnnotRef.current[p] ?? [])
+          if (level) marks[p] = level
+        }
+        setImageMarks(marks)
+      }
     })
   }, [])
 

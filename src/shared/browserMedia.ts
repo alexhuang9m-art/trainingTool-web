@@ -1,4 +1,15 @@
 import type { ChildFolderInfo, MediaListItem } from './types'
+import {
+  bucketsForRoot,
+  deleteRootCache,
+  filesForRoot,
+  listCachedRoots,
+  loadFileRecord,
+  loadRootLabel,
+  loadRootMeta,
+  persistRootCache,
+  type FolderBucket,
+} from './browserMediaDb'
 
 const IMAGE_EXTENSIONS = new Set([
   '.jpg',
@@ -15,11 +26,6 @@ const IMAGE_EXTENSIONS = new Set([
 ])
 
 const BROWSER_ROOTS_KEY = 'training-tool-browser-folder-roots'
-
-type FolderBucket = {
-  subfolders: ChildFolderInfo[]
-  images: MediaListItem[]
-}
 
 function extOf(name: string) {
   const i = name.lastIndexOf('.')
@@ -101,18 +107,31 @@ export async function pickFolderFiles(): Promise<{ files: File[]; label: string 
   return { files, label }
 }
 
+function fileFromRecord(rec: { blob: Blob; basename: string; type: string }): File {
+  return new File([rec.blob], rec.basename, { type: rec.type })
+}
+
 export class BrowserMediaStore {
   private roots: string[] = []
   private rootLabels = new Map<string, string>()
   private buckets = new Map<string, FolderBucket>()
   private files = new Map<string, File>()
   private urls = new Map<string, string>()
+  private hydratePromise: Promise<void> | null = null
+  private hydrated = false
 
   constructor() {
-    this.loadRoots()
+    this.loadRootsFromLocalStorage()
   }
 
-  private loadRoots() {
+  /** Restore folder tree and image blobs from IndexedDB (survives page refresh). */
+  hydrate(): Promise<void> {
+    if (this.hydrated) return Promise.resolve()
+    if (!this.hydratePromise) this.hydratePromise = this.hydrateFromCache()
+    return this.hydratePromise
+  }
+
+  private loadRootsFromLocalStorage() {
     try {
       const raw = localStorage.getItem(BROWSER_ROOTS_KEY)
       if (!raw) return
@@ -128,7 +147,7 @@ export class BrowserMediaStore {
     }
   }
 
-  private persistRoots() {
+  private persistRootsToLocalStorage() {
     const labels: Record<string, string> = {}
     for (const r of this.roots) {
       const label = this.rootLabels.get(r)
@@ -137,12 +156,55 @@ export class BrowserMediaStore {
     localStorage.setItem(BROWSER_ROOTS_KEY, JSON.stringify({ roots: this.roots, labels }))
   }
 
-  getRoots(): string[] {
-    const live = this.roots.filter((r) => this.buckets.has(r))
-    if (live.length !== this.roots.length) {
-      this.roots = live
-      this.persistRoots()
+  private async hydrateFromCache() {
+    try {
+      const cachedRoots = await listCachedRoots()
+      const rootSet = new Set<string>([...this.roots, ...cachedRoots].filter(isBrowserFsPath))
+      this.roots = [...rootSet]
+
+      const loadTasks: Promise<void>[] = []
+
+      for (const rootPath of this.roots) {
+        loadTasks.push(
+          (async () => {
+            const [label, meta] = await Promise.all([loadRootLabel(rootPath), loadRootMeta(rootPath)])
+            if (label) this.rootLabels.set(rootPath, label)
+            if (!meta?.buckets || Object.keys(meta.buckets).length === 0) return
+
+            for (const [folderPath, bucket] of Object.entries(meta.buckets)) {
+              this.buckets.set(folderPath, bucket)
+            }
+
+            const imagePaths: string[] = []
+            const prefix = `${rootPath}/`
+            for (const [folderPath, bucket] of Object.entries(meta.buckets)) {
+              if (folderPath === rootPath || folderPath.startsWith(prefix)) {
+                for (const img of bucket.images) imagePaths.push(img.absolutePath)
+              }
+            }
+
+            await Promise.all(
+              imagePaths.map(async (imagePath) => {
+                if (this.files.has(imagePath)) return
+                const rec = await loadFileRecord(imagePath)
+                if (!rec) return
+                this.files.set(imagePath, fileFromRecord(rec))
+              }),
+            )
+          })(),
+        )
+      }
+
+      await Promise.all(loadTasks)
+
+      this.roots = this.roots.filter((r) => this.buckets.has(r))
+      this.persistRootsToLocalStorage()
+    } finally {
+      this.hydrated = true
     }
+  }
+
+  getRoots(): string[] {
     return [...this.roots]
   }
 
@@ -158,8 +220,19 @@ export class BrowserMediaStore {
     this.indexFolder(rootPath, picked.label, picked.files)
     if (!this.roots.includes(rootPath)) this.roots.push(rootPath)
     this.rootLabels.set(rootPath, picked.label)
-    this.persistRoots()
+    this.persistRootsToLocalStorage()
+    await this.persistRootToCache(rootPath)
     return { roots: this.getRoots(), added: rootPath }
+  }
+
+  private async persistRootToCache(rootPath: string) {
+    const label = this.rootLabels.get(rootPath) ?? basenameOf(rootPath)
+    await persistRootCache(
+      rootPath,
+      label,
+      bucketsForRoot(rootPath, this.buckets),
+      filesForRoot(rootPath, this.files),
+    )
   }
 
   private indexFolder(rootPath: string, rootLabel: string, files: File[]) {
@@ -215,7 +288,7 @@ export class BrowserMediaStore {
     }
   }
 
-  removeRoot(rootPath: string): string[] {
+  async removeRoot(rootPath: string): Promise<string[]> {
     this.roots = this.roots.filter((r) => r !== rootPath)
     this.rootLabels.delete(rootPath)
     const prefix = `${rootPath}/`
@@ -230,7 +303,8 @@ export class BrowserMediaStore {
         this.files.delete(key)
       }
     }
-    this.persistRoots()
+    this.persistRootsToLocalStorage()
+    await deleteRootCache(rootPath)
     return this.getRoots()
   }
 

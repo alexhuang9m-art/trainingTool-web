@@ -31,7 +31,10 @@ export function createBridgeMediaBackend(): MediaBackend {
 export function createBrowserMediaBackend(store: BrowserMediaStore): MediaBackend {
   return {
     isBridge: false,
-    getRoots: async () => store.getRoots(),
+    getRoots: async () => {
+      await store.hydrate()
+      return store.getRoots()
+    },
     pickFolder: async () => {
       const res = await store.pickFolder()
       if (!res) return null
