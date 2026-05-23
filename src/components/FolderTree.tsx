@@ -1,22 +1,30 @@
-import { CaretDownOutlined, CaretRightOutlined, FolderOutlined, FolderOpenOutlined } from '@ant-design/icons'
+import {
+  CaretDownOutlined,
+  CaretRightOutlined,
+  FileImageOutlined,
+  FolderOutlined,
+  FolderOpenOutlined,
+} from '@ant-design/icons'
 import { theme } from 'antd'
 import type { CSSProperties } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { NodeRendererProps, RowRendererProps } from 'react-arborist'
 import { Tree, type NodeApi, type TreeApi } from 'react-arborist'
 import { bridgeAPI } from '../shared/bridge'
-import type { ChildFolderInfo } from '../shared/types'
+import type { ImageMarkLevel } from '../shared/markLevel'
+import type { ChildFolderInfo, MediaListItem } from '../shared/types'
 
-export type FolderNode = {
+export type TreeNode = {
   id: string
   name: string
   path: string
-  children: FolderNode[]
+  kind: 'folder' | 'image'
+  children: TreeNode[]
 }
 
 const TITLE_RESERVE_RIGHT_PX = 20
 
-function mapUpdateChildren(nodes: FolderNode[], id: string, newChildren: FolderNode[]): FolderNode[] {
+function mapUpdateChildren(nodes: TreeNode[], id: string, newChildren: TreeNode[]): TreeNode[] {
   return nodes.map((n) => {
     if (n.id === id) return { ...n, children: newChildren }
     if (n.children?.length) return { ...n, children: mapUpdateChildren(n.children, id, newChildren) }
@@ -24,11 +32,11 @@ function mapUpdateChildren(nodes: FolderNode[], id: string, newChildren: FolderN
   })
 }
 
-function collectFolderPaths(nodes: FolderNode[]): string[] {
+function collectFolderPaths(nodes: TreeNode[]): string[] {
   const out: string[] = []
-  function walk(list: FolderNode[]) {
+  function walk(list: TreeNode[]) {
     for (const n of list) {
-      out.push(n.path)
+      if (n.kind === 'folder') out.push(n.path)
       if (n.children?.length) walk(n.children)
     }
   }
@@ -36,7 +44,48 @@ function collectFolderPaths(nodes: FolderNode[]): string[] {
   return out
 }
 
-function DirectoryRow({ node, innerRef, attrs, children }: RowRendererProps<FolderNode>) {
+function basenameOnly(abs: string): string {
+  const norm = abs.replaceAll('\\', '/').replace(/\/+$/, '')
+  const i = norm.lastIndexOf('/')
+  return i >= 0 ? norm.slice(i + 1) : norm
+}
+
+/** Always show a short folder label, never the full path. */
+function folderDisplayName(path: string, rawName?: string): string {
+  const trimmed = rawName?.trim()
+  if (trimmed && trimmed !== path && !trimmed.includes('/') && !trimmed.includes('\\')) {
+    return trimmed
+  }
+  const base = basenameOnly(path)
+  return base || trimmed || path
+}
+
+function treeNodeLabel(data: TreeNode): string {
+  if (data.kind === 'image') return data.name
+  return folderDisplayName(data.path, data.name)
+}
+
+function toFolderNode(path: string, rawName?: string): TreeNode {
+  return {
+    id: path,
+    name: folderDisplayName(path, rawName),
+    path,
+    kind: 'folder',
+    children: [],
+  }
+}
+
+function toImageNode(item: MediaListItem): TreeNode {
+  return {
+    id: item.absolutePath,
+    name: item.basename,
+    path: item.absolutePath,
+    kind: 'image',
+    children: [],
+  }
+}
+
+function DirectoryRow({ node, innerRef, attrs, children }: RowRendererProps<TreeNode>) {
   const { token } = theme.useToken()
   return (
     <div
@@ -61,15 +110,52 @@ function DirectoryRow({ node, innerRef, attrs, children }: RowRendererProps<Fold
   )
 }
 
-function DirectoryNode({ node, style }: { node: NodeApi<FolderNode>; style: CSSProperties }) {
+function imageMarkSlotClass(
+  selectionMode: boolean,
+  selected: boolean,
+  mark: ImageMarkLevel | null | undefined,
+): string {
+  if (!selectionMode) return 'tree-mark-slot tree-mark-slot--compact'
+  if (!selected) return 'tree-mark-slot tree-mark-slot--ring-idle'
+  if (mark === 'P0') return 'tree-mark-slot tree-mark-slot--selected-p0'
+  if (mark === 'P1') return 'tree-mark-slot tree-mark-slot--selected-p1'
+  return 'tree-mark-slot tree-mark-slot--selected-accent'
+}
+
+function DirectoryNode({
+  node,
+  style,
+  mark,
+  selectionMode,
+  selected,
+}: {
+  node: NodeApi<TreeNode>
+  style: CSSProperties
+  mark: ImageMarkLevel | null | undefined
+  selectionMode: boolean
+  selected: boolean
+}) {
   const { token } = theme.useToken()
+  const isImage = node.data.kind === 'image'
   const open = node.isOpen
+
   const folderIcon =
-    !node.isLeaf && open ? (
+    !isImage && open ? (
       <FolderOpenOutlined style={{ color: 'var(--accent)', fontSize: 16 }} />
-    ) : (
+    ) : !isImage ? (
       <FolderOutlined style={{ color: 'var(--accent)', fontSize: 16 }} />
+    ) : (
+      <FileImageOutlined style={{ color: token.colorTextDescription, fontSize: 15 }} />
     )
+
+  const dotClass =
+    mark === 'P0'
+      ? 'tree-mark-dot tree-mark-dot--p0'
+      : mark === 'P1'
+        ? 'tree-mark-dot tree-mark-dot--p1'
+        : 'tree-mark-dot tree-mark-dot--empty'
+
+  const slotClass = isImage ? imageMarkSlotClass(selectionMode, selected, mark) : ''
 
   return (
     <div
@@ -86,7 +172,11 @@ function DirectoryNode({ node, style }: { node: NodeApi<FolderNode>; style: CSSP
         color: token.colorText,
       }}
     >
-      {!node.isLeaf ? (
+      {isImage ? (
+        <span className={slotClass} aria-hidden>
+          <span className={dotClass} />
+        </span>
+      ) : !node.isLeaf ? (
         <span
           className="directory-tree-switcher"
           role="button"
@@ -120,12 +210,12 @@ function DirectoryNode({ node, style }: { node: NodeApi<FolderNode>; style: CSSP
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
-          fontSize: token.fontSize,
-          marginRight: TITLE_RESERVE_RIGHT_PX,
+          fontSize: isImage ? token.fontSizeSM : token.fontSize,
+          marginRight: isImage ? 0 : TITLE_RESERVE_RIGHT_PX,
         }}
-        title={node.data.path}
+        title={isImage ? node.data.path : treeNodeLabel(node.data)}
       >
-        {node.data.name}
+        {treeNodeLabel(node.data)}
       </span>
     </div>
   )
@@ -133,32 +223,50 @@ function DirectoryNode({ node, style }: { node: NodeApi<FolderNode>; style: CSSP
 
 type Props = {
   roots: string[]
+  browserImages: MediaListItem[]
   treeSelectionPath: string | null
   expandImportedRoot: { path: string; nonce: number } | null
-  onSelectPath: (path: string | null) => void
+  imageMarks: Record<string, ImageMarkLevel>
+  selectionMode: boolean
+  selectedPaths: Set<string>
+  onSelectFolder: (path: string) => void
+  onSelectImage: (path: string) => void
+  onToggleImageSelect: (path: string) => void
   onRemoveRoot: (rootPath: string) => void
+  onImagesDiscovered: (paths: string[]) => void
   bridgeReady: boolean
 }
 
-function basenameOnly(abs: string): string {
-  const norm = abs.replaceAll('\\', '/')
-  const i = norm.lastIndexOf('/')
-  return i >= 0 ? norm.slice(i + 1) : abs
+async function loadFolderChildren(folderPath: string): Promise<TreeNode[]> {
+  const [kids, images] = await Promise.all([
+    bridgeAPI.listChildFolders(folderPath),
+    bridgeAPI.mediaListDirect(folderPath),
+  ])
+  const subfolders: TreeNode[] = kids.map((k: ChildFolderInfo) => toFolderNode(k.absolutePath, k.name))
+  const files: TreeNode[] = images.map(toImageNode)
+  return [...subfolders, ...files]
 }
 
 export function FolderTree({
   roots,
+  browserImages,
   treeSelectionPath,
   expandImportedRoot,
-  onSelectPath,
+  imageMarks,
+  selectionMode,
+  selectedPaths,
+  onSelectFolder,
+  onSelectImage,
+  onToggleImageSelect,
   onRemoveRoot,
+  onImagesDiscovered,
   bridgeReady,
 }: Props) {
   const { token } = theme.useToken()
-  const treeRef = useRef<TreeApi<FolderNode>>(null)
+  const treeRef = useRef<TreeApi<TreeNode>>(null)
   const loadedRef = useRef(new Set<string>())
   const folderCountsRef = useRef<Record<string, number>>({})
-  const [treeData, setTreeData] = useState<FolderNode[]>([])
+  const [treeData, setTreeData] = useState<TreeNode[]>([])
   const [folderCounts, setFolderCounts] = useState<Record<string, number>>({})
   const wrapRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -168,15 +276,35 @@ export function FolderTree({
     loadedRef.current = new Set()
     folderCountsRef.current = {}
     setFolderCounts({})
-    setTreeData(
-      roots.map((r) => ({
-        id: r,
-        name: basenameOnly(r),
-        path: r,
-        children: [],
-      })),
-    )
-  }, [roots])
+
+    if (roots.length > 0) {
+      setTreeData(roots.map((r) => toFolderNode(r)))
+      return
+    }
+
+    if (browserImages.length > 0) {
+      setTreeData([
+        {
+          id: '__browser__',
+          name: 'Imported Photos',
+          path: '__browser__',
+          kind: 'folder',
+          children: browserImages.map(toImageNode),
+        },
+      ])
+      loadedRef.current.add('__browser__')
+      queueMicrotask(() => treeRef.current?.open('__browser__'))
+      return
+    }
+
+    setTreeData([])
+  }, [roots, browserImages])
+
+  useEffect(() => {
+    if (browserImages.length > 0 && roots.length === 0) {
+      onImagesDiscovered(browserImages.map((m) => m.absolutePath))
+    }
+  }, [browserImages, roots.length, onImagesDiscovered])
 
   useEffect(() => {
     if (!bridgeReady || treeData.length === 0) return
@@ -195,6 +323,16 @@ export function FolderTree({
       })
   }, [treeData, bridgeReady])
 
+  const applyLoadedChildren = useCallback(
+    (folderPath: string, children: TreeNode[]) => {
+      loadedRef.current.add(folderPath)
+      setTreeData((prev) => mapUpdateChildren(prev, folderPath, children))
+      const imagePaths = children.filter((c) => c.kind === 'image').map((c) => c.path)
+      if (imagePaths.length) onImagesDiscovered(imagePaths)
+    },
+    [onImagesDiscovered],
+  )
+
   useEffect(() => {
     if (!expandImportedRoot || !bridgeReady) return
     const { path } = expandImportedRoot
@@ -203,15 +341,7 @@ export function FolderTree({
     const run = async () => {
       if (!loadedRef.current.has(path)) {
         try {
-          const kids = await bridgeAPI.listChildFolders(path)
-          loadedRef.current.add(path)
-          const nextChildren: FolderNode[] = kids.map((k: ChildFolderInfo) => ({
-            id: k.id,
-            name: k.name,
-            path: k.absolutePath,
-            children: [],
-          }))
-          setTreeData((prev) => mapUpdateChildren(prev, path, nextChildren))
+          applyLoadedChildren(path, await loadFolderChildren(path))
         } catch {
           return
         }
@@ -219,10 +349,10 @@ export function FolderTree({
       queueMicrotask(() => treeRef.current?.open(path))
     }
     void run()
-  }, [expandImportedRoot?.path, expandImportedRoot?.nonce, bridgeReady, roots])
+  }, [expandImportedRoot?.path, expandImportedRoot?.nonce, bridgeReady, roots, applyLoadedChildren])
 
   useLayoutEffect(() => {
-    const target = roots.length === 0 ? wrapRef.current : panelRef.current
+    const target = treeData.length === 0 ? wrapRef.current : panelRef.current
     if (!target) return
     const measure = () => {
       setSize({ w: Math.max(160, target.clientWidth), h: Math.max(120, target.clientHeight) })
@@ -231,39 +361,35 @@ export function FolderTree({
     const ro = new ResizeObserver(measure)
     ro.observe(target)
     return () => ro.disconnect()
-  }, [roots.length])
+  }, [treeData.length])
 
   const handleToggle = useCallback(
     (id: string) => {
+      if (id === '__browser__') return
       if (!bridgeReady) return
+      const node = treeRef.current?.get(id)
+      if (node?.data.kind !== 'folder') return
+
       queueMicrotask(() => {
         const api = treeRef.current
         if (!api?.isOpen(id)) return
         if (loadedRef.current.has(id)) return
-        void bridgeAPI
-          .listChildFolders(id)
-          .then((kids) => {
-            loadedRef.current.add(id)
-            const nextChildren: FolderNode[] = kids.map((k) => ({
-              id: k.id,
-              name: k.name,
-              path: k.absolutePath,
-              children: [],
-            }))
-            setTreeData((prev) => mapUpdateChildren(prev, id, nextChildren))
-          })
+        void loadFolderChildren(id)
+          .then((children) => applyLoadedChildren(id, children))
           .catch(() => {})
       })
     },
-    [bridgeReady],
+    [bridgeReady, applyLoadedChildren],
   )
 
   const DirectoryNodeWithExtras = useCallback(
-    (props: NodeRendererProps<FolderNode>) => {
+    (props: NodeRendererProps<TreeNode>) => {
       const { node, style, dragHandle } = props
-      const isRootRow = node.level === 0
-      const count = folderCounts[node.data.path]
-      const countLabel = count === undefined ? '…' : String(count)
+      const isRootRow = node.level === 0 && node.data.kind === 'folder'
+      const isImage = node.data.kind === 'image'
+      const count = !isImage ? folderCounts[node.data.path] : undefined
+      const countLabel = count === undefined ? (isImage ? '' : '…') : String(count)
+
       return (
         <div
           ref={dragHandle}
@@ -277,20 +403,28 @@ export function FolderTree({
           }}
         >
           <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-            <DirectoryNode node={node} style={style} />
+            <DirectoryNode
+              node={node}
+              style={style}
+              mark={isImage ? imageMarks[node.data.path] : undefined}
+              selectionMode={isImage ? selectionMode : false}
+              selected={isImage ? selectedPaths.has(node.data.path) : false}
+            />
           </div>
-          <span
-            style={{
-              flexShrink: 0,
-              minWidth: 28,
-              fontSize: 11,
-              fontVariantNumeric: 'tabular-nums',
-              color: token.colorTextDescription,
-            }}
-          >
-            {countLabel}
-          </span>
-          {isRootRow ? (
+          {!isImage ? (
+            <span
+              style={{
+                flexShrink: 0,
+                minWidth: 28,
+                fontSize: 11,
+                fontVariantNumeric: 'tabular-nums',
+                color: token.colorTextDescription,
+              }}
+            >
+              {countLabel}
+            </span>
+          ) : null}
+          {isRootRow && node.data.path !== '__browser__' ? (
             <button
               type="button"
               className="folder-tree-root-remove"
@@ -306,19 +440,19 @@ export function FolderTree({
         </div>
       )
     },
-    [folderCounts, onRemoveRoot, token.colorTextDescription],
+    [folderCounts, imageMarks, selectionMode, selectedPaths, onRemoveRoot, token.colorTextDescription],
   )
 
   return (
     <div
       ref={wrapRef}
-      className={`directory-tree-wrap ${roots.length === 0 ? 'directory-tree-wrap--empty' : ''}`}
+      className={`directory-tree-wrap ${treeData.length === 0 ? 'directory-tree-wrap--empty' : ''}`}
     >
-      {roots.length === 0 ? (
+      {treeData.length === 0 ? (
         <div className="folder-tree-empty">No folders yet</div>
       ) : (
         <div ref={panelRef} className="directory-tree-panel">
-          <Tree<FolderNode>
+          <Tree<TreeNode>
             ref={treeRef}
             data={treeData}
             width={size.w}
@@ -332,7 +466,34 @@ export function FolderTree({
             disableDrop
             disableMultiSelection
             onToggle={handleToggle}
-            onSelect={(nodes) => onSelectPath(nodes[0]?.data.path ?? null)}
+            onSelect={(nodes) => {
+              const n = nodes[0]?.data
+              if (!n) return
+              if (n.kind === 'image') {
+                if (selectionMode) {
+                  onToggleImageSelect(n.path)
+                  return
+                }
+                onSelectImage(n.path)
+                return
+              }
+              onSelectFolder(n.path)
+              if (n.path === '__browser__') {
+                queueMicrotask(() => treeRef.current?.open(n.path))
+                return
+              }
+              if (!bridgeReady) return
+              if (!loadedRef.current.has(n.path)) {
+                void loadFolderChildren(n.path)
+                  .then((children) => {
+                    applyLoadedChildren(n.path, children)
+                    queueMicrotask(() => treeRef.current?.open(n.path))
+                  })
+                  .catch(() => {})
+              } else {
+                queueMicrotask(() => treeRef.current?.open(n.path))
+              }
+            }}
             renderRow={DirectoryRow}
           >
             {DirectoryNodeWithExtras}
