@@ -12,6 +12,7 @@ type Props = {
   selectedPaths: Set<string>
   selectionMode: boolean
   browseFolderPath: string | null
+  folderImagePaths: string[]
   exportReady: boolean
   browserStore: BrowserMediaStore | null
   media: MediaBackend
@@ -35,6 +36,7 @@ export function Sidebar({
   selectedPaths,
   selectionMode,
   browseFolderPath,
+  folderImagePaths,
   exportReady,
   browserStore,
   media,
@@ -94,6 +96,7 @@ export function Sidebar({
           onRemoveRoot={onRemove}
           onImagesDiscovered={onImagesDiscovered}
           media={media}
+          folderImagePaths={folderImagePaths}
         />
       </div>
 
@@ -139,6 +142,7 @@ export function Sidebar({
             导出标注 JSON
           </button>
         </div>
+        <div className="sidebar-bottom-bar-spacer" aria-hidden />
       </div>
     </aside>
   )

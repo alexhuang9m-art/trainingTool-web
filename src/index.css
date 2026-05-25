@@ -8,6 +8,8 @@
   --p0: #ff3b30;
   --p1: #ff9500;
   --sidebar-width: 260px;
+  --guide-sidebar-width: 300px;
+  --bottom-bar-height: 48px;
   font-family:
     system-ui,
     -apple-system,
@@ -45,6 +47,7 @@ button {
 }
 
 .app-shell {
+  position: relative;
   display: flex;
   height: 100%;
   min-height: 0;
@@ -283,6 +286,11 @@ button {
   cursor: not-allowed;
 }
 
+.sidebar-bottom-bar-spacer {
+  flex-shrink: 0;
+  height: var(--bottom-bar-height);
+}
+
 .tree-mark-slot {
   display: inline-flex;
   align-items: center;
@@ -478,13 +486,46 @@ button {
 }
 
 .bottom-bar {
-  flex-shrink: 0;
-  height: 48px;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  height: var(--bottom-bar-height);
   border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 0 14px;
-  background: var(--bg-elevated);
+  background: rgba(37, 37, 38, 0.94);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
+.bottom-bar .status-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bottom-bar-guide-toggle {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.bottom-bar-guide-toggle:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .pill-btn {
@@ -508,4 +549,322 @@ button {
 .status-text {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.guide-sidebar {
+  width: var(--guide-sidebar-width);
+  min-width: var(--guide-sidebar-width);
+  flex-shrink: 0;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.guide-sidebar-header {
+  flex-shrink: 0;
+  padding: 14px 12px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.guide-sidebar-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+
+.guide-sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 10px calc(var(--bottom-bar-height) + 12px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.guide-level-grid--text-only {
+  row-gap: 0;
+}
+
+.guide-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 10px 12px;
+  background: var(--bg);
+  min-height: 118px;
+  box-sizing: border-box;
+}
+
+.guide-sidebar:not(.guide-sidebar--illustrations-collapsed) .guide-card {
+  min-height: 228px;
+}
+
+.guide-card--add {
+  width: 100%;
+  cursor: pointer;
+  border-style: dashed;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font: inherit;
+  text-align: center;
+  transition:
+    border-color 0.15s,
+    color 0.15s,
+    background 0.15s;
+}
+
+.guide-card--add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(10, 132, 255, 0.06);
+}
+
+.guide-card-add-icon {
+  font-size: 28px;
+  font-weight: 300;
+  line-height: 1;
+}
+
+.guide-card-add-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.guide-category-select-btn--custom {
+  font-size: 0;
+}
+
+.guide-card--active-category {
+  border-color: rgba(10, 132, 255, 0.45);
+}
+
+.guide-card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.guide-card-title {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.guide-category-select-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.guide-category-select-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.guide-category-select-btn--active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  color: var(--accent);
+}
+
+.guide-level-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 6px;
+  row-gap: 8px;
+}
+
+.guide-level-col-head {
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.guide-level-col-head--empty .guide-level-text {
+  opacity: 0.45;
+}
+
+.guide-level-badge {
+  display: inline;
+  vertical-align: baseline;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  line-height: 1.4;
+  margin-right: 4px;
+  white-space: nowrap;
+}
+
+.guide-level-text {
+  display: inline;
+  margin: 0;
+  font-size: 11px;
+  line-height: inherit;
+  color: var(--text-muted);
+}
+
+.guide-level-badge--p0 {
+  color: #ff6b63;
+  background: rgba(255, 59, 48, 0.18);
+  border: 1px solid rgba(255, 59, 48, 0.45);
+}
+
+.guide-level-badge--p1 {
+  color: #ffb340;
+  background: rgba(255, 149, 0, 0.18);
+  border: 1px solid rgba(255, 149, 0, 0.45);
+}
+
+.guide-illustration {
+  position: relative;
+  height: 100%;
+  min-height: 108px;
+  border-radius: 6px;
+  border: 1px dashed var(--border);
+  background: #111;
+  overflow: hidden;
+}
+
+.guide-illustration--drag-over {
+  border-color: var(--accent);
+  background: rgba(10, 132, 255, 0.08);
+}
+
+.guide-illustration--disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.guide-illustration-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.guide-illustration-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px;
+  text-align: center;
+}
+
+.guide-illustration-placeholder-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.guide-illustration-placeholder-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.guide-illustration-reset {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.guide-illustration-reset:hover {
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.add-guide-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.add-guide-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.add-guide-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.add-guide-required {
+  color: var(--p0);
+}
+
+.add-guide-illustration-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.add-guide-file-btn {
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.add-guide-file-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.add-guide-file-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.add-guide-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--p0);
 }

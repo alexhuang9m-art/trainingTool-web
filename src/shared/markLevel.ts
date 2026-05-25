@@ -5,12 +5,23 @@ export type ImageMarkLevel = BlurLevel
 /** Label used in folder export JSON (`mark` field). */
 export type ExportMark = BlurLevel | 'clear'
 
+function blurLevelFromShape(shape: AnnotationShape): BlurLevel | null {
+  const raw = shape.level
+  if (raw === 'P0' || raw === 'P1') return raw
+  return null
+}
+
+/**
+ * Sidebar dot / selection ring color for a photo.
+ * Any P0 shape wins over P1, across all annotation types on the image.
+ */
 export function markLevelFromShapes(shapes: AnnotationShape[]): ImageMarkLevel | null {
   let hasP0 = false
   let hasP1 = false
-  for (const s of shapes) {
-    if (s.level === 'P0') hasP0 = true
-    if (s.level === 'P1') hasP1 = true
+  for (const shape of shapes) {
+    const level = blurLevelFromShape(shape)
+    if (level === 'P0') hasP0 = true
+    else if (level === 'P1') hasP1 = true
   }
   if (hasP0) return 'P0'
   if (hasP1) return 'P1'
