@@ -19,6 +19,8 @@ export type AnnotationPolyline = {
   width: number
   /** When true, last point connects back to the first */
   closed?: boolean
+  /** English category label shown at the start anchor */
+  categoryEnglishName?: string
 }
 
 export type AnnotationBox = {

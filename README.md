@@ -58,16 +58,46 @@ npm run dev
 
 坐标为**原图像素坐标**，便于后续生成 mask 或 COCO 风格导出。
 
-文件夹导出：`POST /api/annotations/export` → 下载 JSON，供训练流水线消费。每张图含 `mark` 字段：`P0` / `P1` 来自标注形状；无标注时为 `clear`（`shapes` 为空数组）。
+文件夹导出（侧边栏「导出标注 JSON」）包含：
+
+- **`annotationTypes`**：所有内置与自定义标注类型的说明（`title`、`englishName`、各等级 `P0`/`P1` 的 `description`）；折线上的 `categoryEnglishName` 与该字段对应
+- **`markLegend`**：`mark` 字段含义（`P0` / `P1` / `clear`）
+- **`images`**：每张图的 `mark`、`shapes`（折线含 `categoryEnglishName`）
 
 ```json
 {
-  "imagePath": "/path/to/photo-clear.jpg",
-  "basename": "photo-clear.jpg",
-  "mark": "clear",
-  "shapes": []
+  "version": 1,
+  "folderPath": "/path/to/folder",
+  "exportedAt": "2026-05-23T12:00:00.000Z",
+  "markLegend": {
+    "P0": "…",
+    "P1": "…",
+    "clear": "…"
+  },
+  "annotationTypes": [
+    {
+      "id": "motion-blur",
+      "title": "运动模糊/motionblur",
+      "englishName": "motionblur",
+      "shortcut": "Q",
+      "levels": [
+        { "level": "P1", "description": "有肉眼可见的运动模糊…" },
+        { "level": "P0", "description": "非常严重的运动模糊…" }
+      ]
+    }
+  ],
+  "images": [
+    {
+      "imagePath": "/path/to/photo.jpg",
+      "basename": "photo.jpg",
+      "mark": "P0",
+      "shapes": []
+    }
+  ]
 }
 ```
+
+Bridge 模式：`POST /api/annotations/export` 返回 `images`；前端导出时会合并当前会话中的 `annotationTypes`（含 localStorage 里的自定义类型）。
 
 ## 部署到 Vercel
 

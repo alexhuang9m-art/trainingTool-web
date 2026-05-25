@@ -1,6 +1,7 @@
 import { ConfigProvider, theme } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnnotationCanvas } from './components/AnnotationCanvas'
+import { AnnotationGuideSidebar } from './components/AnnotationGuideSidebar'
 import { Sidebar } from './components/Sidebar'
 import { bridgeAPI, bridgeAvailable } from './shared/bridge'
 import { BrowserMediaStore, isBrowserFsPath } from './shared/browserMedia'
@@ -9,6 +10,14 @@ import {
   createBrowserMediaBackend,
   type MediaBackend,
 } from './shared/mediaBackend'
+import {
+  DEFAULT_ANNOTATION_CATEGORY_ID,
+  getAnnotationGuideType,
+  getAnnotationGuideTypeByShortcut,
+  loadAllGuideTypes,
+  type AnnotationGuideType,
+} from './shared/annotationGuide'
+import { buildAnnotationExportBundle } from './shared/exportBundle'
 import { markLevelFromShapes, toExportedImage, type ImageMarkLevel } from './shared/markLevel'
 import type { AnnotationShape, AnnotTool, WorkspaceImage } from './shared/types'
 import { normalizeShapes } from './shared/types'
@@ -20,6 +29,7 @@ function basenameFromPath(abs: string): string {
 }
 
 const BROWSER_ANNOT_KEY = 'training-tool-browser-annotations'
+const ACTIVE_CATEGORY_KEY = 'training-tool-active-category'
 
 function pathIsUnderAncestor(candidate: string | null, ancestor: string): boolean {
   if (!candidate) return false
@@ -67,9 +77,69 @@ export default function App() {
   const [selectionMode, setSelectionMode] = useState(false)
   const [currentFolderImagePaths, setCurrentFolderImagePaths] = useState<string[]>([])
   const [status, setStatus] = useState('就绪')
+  const [guideIllustrationsOpen, setGuideIllustrationsOpen] = useState(() => {
+    try {
+      return localStorage.getItem('training-tool-guide-illustrations-open') !== '0'
+    } catch {
+      return true
+    }
+  })
+  const [guideTypes, setGuideTypes] = useState<AnnotationGuideType[]>(() => loadAllGuideTypes())
+  const [activeCategoryId, setActiveCategoryId] = useState(() => {
+    const types = loadAllGuideTypes()
+    try {
+      const saved = localStorage.getItem(ACTIVE_CATEGORY_KEY)
+      return getAnnotationGuideType(saved ?? '', types)?.id ?? DEFAULT_ANNOTATION_CATEGORY_ID
+    } catch {
+      return DEFAULT_ANNOTATION_CATEGORY_ID
+    }
+  })
   const browserStoreRef = useRef(new BrowserMediaStore())
   const browserAnnotRef = useRef(loadBrowserAnnotations())
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const categoryEnglishName = useMemo(
+    () => getAnnotationGuideType(activeCategoryId, guideTypes)?.englishName ?? 'motionblur',
+    [activeCategoryId, guideTypes],
+  )
+
+  const handleSelectCategory = useCallback(
+    (id: string) => {
+      setActiveCategoryId(id)
+      try {
+        localStorage.setItem(ACTIVE_CATEGORY_KEY, id)
+      } catch {
+        /* ignore */
+      }
+      const guide = getAnnotationGuideType(id, guideTypes)
+      setStatus(guide ? `当前标注类型：${guide.title}` : '就绪')
+    },
+    [guideTypes],
+  )
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey || e.ctrlKey || e.metaKey) return
+      const el = e.target as HTMLElement | null
+      if (el?.closest('input, textarea, select, [contenteditable="true"]')) return
+      if (e.key === '1' || e.code === 'Digit1' || e.code === 'Numpad1') {
+        e.preventDefault()
+        setActiveLevel('P0')
+        return
+      }
+      if (e.key === '2' || e.code === 'Digit2' || e.code === 'Numpad2') {
+        e.preventDefault()
+        setActiveLevel('P1')
+        return
+      }
+      const guide = getAnnotationGuideTypeByShortcut(e.key)
+      if (!guide) return
+      e.preventDefault()
+      handleSelectCategory(guide.id)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [handleSelectCategory])
 
   const media: MediaBackend = useMemo(
     () =>
@@ -107,27 +177,27 @@ export default function App() {
   const refreshImageMarks = useCallback(
     async (paths: string[]) => {
       if (!paths.length) return
-      const updates: Record<string, ImageMarkLevel> = {}
+      const updates: Record<string, ImageMarkLevel | null> = {}
       await Promise.all(
         paths.map(async (p) => {
           if (!media.isBridge || isBrowserFsPath(p)) {
-            const level = markLevelFromShapes(browserAnnotRef.current[p] ?? [])
-            if (level) updates[p] = level
+            updates[p] = markLevelFromShapes(browserAnnotRef.current[p] ?? [])
             return
           }
           try {
             const doc = await bridgeAPI.getAnnotations(p)
-            const level = markLevelFromShapes(normalizeShapes(doc))
-            if (level) updates[p] = level
+            updates[p] = markLevelFromShapes(normalizeShapes(doc))
           } catch {
-            /* skip */
+            /* keep previous mark on fetch failure */
           }
         }),
       )
       setImageMarks((prev) => {
         const next = { ...prev }
         for (const p of paths) {
-          if (updates[p]) next[p] = updates[p]
+          if (!(p in updates)) continue
+          const level = updates[p]
+          if (level) next[p] = level
           else delete next[p]
         }
         return next
@@ -155,18 +225,24 @@ export default function App() {
 
   const loadShapesForImage = useCallback(
     async (img: WorkspaceImage) => {
+      const path = img.source === 'bridge' ? img.absolutePath : img.id
       if (img.source === 'bridge') {
         try {
           const doc = await bridgeAPI.getAnnotations(img.absolutePath)
-          setShapes(normalizeShapes(doc))
+          const loaded = normalizeShapes(doc)
+          setShapes(loaded)
+          applyImageMark(path, loaded)
         } catch {
           setShapes([])
+          applyImageMark(path, [])
         }
       } else {
-        setShapes(browserAnnotRef.current[img.id] ?? [])
+        const loaded = browserAnnotRef.current[img.id] ?? []
+        setShapes(loaded)
+        applyImageMark(path, loaded)
       }
     },
-    [],
+    [applyImageMark],
   )
 
   const scheduleSave = useCallback(
@@ -305,28 +381,24 @@ export default function App() {
     if (media.isBridge) {
       const data = await bridgeAPI.exportFolder(browseFolderPath)
       const parsed = data as { images?: ReturnType<typeof toExportedImage>[]; folderPath?: string }
-      const bundle = (parsed.images ?? []).filter((img) => selectedPaths.has(img.imagePath))
-      if (bundle.length === 0) return
-      downloadJson({ ...parsed, images: bundle, exportedAt: new Date().toISOString() }, bundle.length)
+      const images = (parsed.images ?? []).filter((img) => selectedPaths.has(img.imagePath))
+      if (images.length === 0) return
+      downloadJson(
+        buildAnnotationExportBundle(parsed.folderPath ?? browseFolderPath, images, guideTypes),
+        images.length,
+      )
       return
     }
 
     const list = await media.mediaList(browseFolderPath)
-    const bundle = list
+    const images = list
       .filter((m) => selectedPaths.has(m.absolutePath))
       .map((m) =>
         toExportedImage(m.absolutePath, m.basename, browserAnnotRef.current[m.absolutePath] ?? []),
       )
-    if (bundle.length === 0) return
-    downloadJson(
-      {
-        folderPath: browseFolderPath,
-        exportedAt: new Date().toISOString(),
-        images: bundle,
-      },
-      bundle.length,
-    )
-  }, [browseFolderPath, media, selectedPaths, downloadJson])
+    if (images.length === 0) return
+    downloadJson(buildAnnotationExportBundle(browseFolderPath, images, guideTypes), images.length)
+  }, [browseFolderPath, media, selectedPaths, downloadJson, guideTypes])
 
   const exportReady = Boolean(browseFolderPath)
 
@@ -361,6 +433,7 @@ export default function App() {
           selectedPaths={selectedPaths}
           selectionMode={selectionMode}
           browseFolderPath={browseFolderPath}
+          folderImagePaths={currentFolderImagePaths}
           exportReady={exportReady}
           browserStore={bridgeReady ? null : browserStoreRef.current}
           media={media}
@@ -422,16 +495,18 @@ export default function App() {
               <button
                 type="button"
                 className={`tool-btn ${activeLevel === 'P0' ? 'tool-btn--active-p0' : ''}`}
+                aria-keyshortcuts="1"
                 onClick={() => setActiveLevel('P0')}
               >
-                P0 红
+                1 · P0 红
               </button>
               <button
                 type="button"
                 className={`tool-btn ${activeLevel === 'P1' ? 'tool-btn--active-p1' : ''}`}
+                aria-keyshortcuts="2"
                 onClick={() => setActiveLevel('P1')}
               >
-                P1 橙
+                2 · P1 橙
               </button>
               <span className="toolbar-sep" />
               <button
@@ -458,6 +533,7 @@ export default function App() {
                   shapes={shapes}
                   activeLevel={activeLevel}
                   activeTool={activeTool}
+                  categoryEnglishName={categoryEnglishName}
                   onChange={handleShapesChange}
                 />
               ) : (
@@ -467,10 +543,34 @@ export default function App() {
               )}
             </div>
           </div>
-          <footer className="bottom-bar">
-            <span className="status-text">{status}</span>
-          </footer>
         </div>
+        <AnnotationGuideSidebar
+          guideTypes={guideTypes}
+          illustrationsOpen={guideIllustrationsOpen}
+          activeCategoryId={activeCategoryId}
+          onSelectCategory={handleSelectCategory}
+          onGuideTypesChange={setGuideTypes}
+        />
+        <footer className="bottom-bar">
+          <span className="status-text">{status}</span>
+          <button
+            type="button"
+            className="bottom-bar-guide-toggle"
+            onClick={() => {
+              setGuideIllustrationsOpen((open) => {
+                const next = !open
+                try {
+                  localStorage.setItem('training-tool-guide-illustrations-open', next ? '1' : '0')
+                } catch {
+                  /* ignore */
+                }
+                return next
+              })
+            }}
+          >
+            {guideIllustrationsOpen ? '收起示意图' : '展开示意图'}
+          </button>
+        </footer>
       </div>
     </ConfigProvider>
   )

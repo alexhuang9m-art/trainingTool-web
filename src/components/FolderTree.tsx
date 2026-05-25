@@ -85,6 +85,21 @@ function toImageNode(item: MediaListItem): TreeNode {
   }
 }
 
+function isTypingTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null
+  if (!el) return false
+  return Boolean(el.closest('input, textarea, select, [contenteditable="true"]'))
+}
+
+function navigableImagePaths(api: TreeApi<TreeNode> | null | undefined, fallback: string[]): string[] {
+  const visible =
+    api?.visibleNodes
+      .map((n) => n.data)
+      .filter((d) => d.kind === 'image')
+      .map((d) => d.path) ?? []
+  return visible.length > 0 ? visible : fallback
+}
+
 function DirectoryRow({ node, innerRef, attrs, children }: RowRendererProps<TreeNode>) {
   const { token } = theme.useToken()
   return (
@@ -235,6 +250,8 @@ type Props = {
   onRemoveRoot: (rootPath: string) => void
   onImagesDiscovered: (paths: string[]) => void
   media: MediaBackend
+  /** Recursive image paths for the active folder; used when the tree row is not visible yet. */
+  folderImagePaths: string[]
 }
 
 async function loadFolderChildren(media: MediaBackend, folderPath: string): Promise<TreeNode[]> {
@@ -261,9 +278,11 @@ export function FolderTree({
   onRemoveRoot,
   onImagesDiscovered,
   media,
+  folderImagePaths,
 }: Props) {
   const { token } = theme.useToken()
   const treeRef = useRef<TreeApi<TreeNode>>(null)
+  const treeSelectionRef = useRef(treeSelectionPath)
   const loadedRef = useRef(new Set<string>())
   const folderCountsRef = useRef<Record<string, number>>({})
   const [treeData, setTreeData] = useState<TreeNode[]>([])
@@ -271,6 +290,45 @@ export function FolderTree({
   const wrapRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 240, h: 400 })
+
+  useEffect(() => {
+    treeSelectionRef.current = treeSelectionPath
+  }, [treeSelectionPath])
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+      if (e.altKey || e.ctrlKey || e.metaKey) return
+      if (isTypingTarget(e.target)) return
+
+      const images = navigableImagePaths(treeRef.current, folderImagePaths)
+      if (images.length === 0) return
+
+      const current = treeSelectionRef.current
+      let idx =
+        current && images.includes(current) ? images.indexOf(current) : -1
+
+      if (e.key === 'ArrowDown') {
+        idx = idx < 0 ? 0 : Math.min(images.length - 1, idx + 1)
+      } else {
+        idx = idx < 0 ? images.length - 1 : Math.max(0, idx - 1)
+      }
+
+      const next = images[idx]
+      if (!next || (current === next && idx >= 0)) return
+
+      e.preventDefault()
+      e.stopPropagation()
+
+      onSelectImage(next)
+      const api = treeRef.current
+      api?.select(next, { focus: false })
+      void api?.scrollTo(next)
+    }
+
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [folderImagePaths, onSelectImage])
 
   useEffect(() => {
     loadedRef.current = new Set()
@@ -430,7 +488,7 @@ export function FolderTree({
       {treeData.length === 0 ? (
         <div className="folder-tree-empty">No folders yet</div>
       ) : (
-        <div ref={panelRef} className="directory-tree-panel">
+        <div ref={panelRef} className="directory-tree-panel" tabIndex={-1}>
           <Tree<TreeNode>
             ref={treeRef}
             data={treeData}

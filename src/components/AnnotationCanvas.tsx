@@ -24,6 +24,7 @@ type Props = {
   shapes: AnnotationShape[]
   activeLevel: BlurLevel
   activeTool: AnnotTool
+  categoryEnglishName: string
   onChange: (shapes: AnnotationShape[]) => void
 }
 
@@ -37,6 +38,26 @@ function pointDist(a: StrokePoint, b: StrokePoint) {
 
 function closeSnapThreshold(lineWidth: number) {
   return lineWidth * CLOSE_SNAP_FACTOR
+}
+
+function drawCategoryLabel(
+  ctx: CanvasRenderingContext2D,
+  point: StrokePoint,
+  text: string,
+  level: BlurLevel,
+  scale: number,
+  lineWidth: number,
+) {
+  const x = point.x * scale
+  const y = point.y * scale
+  const offset = lineWidth * scale * 0.5 + 6
+  const fontSize = Math.max(11, Math.min(15, 12 * scale))
+  ctx.font = `600 ${fontSize}px system-ui, -apple-system, sans-serif`
+  ctx.textBaseline = 'bottom'
+  const tx = x + offset
+  const ty = y - offset
+  ctx.fillStyle = LEVEL_COLOR[level]
+  ctx.fillText(text, tx, ty)
 }
 
 function drawPolyline(
@@ -105,6 +126,7 @@ export function AnnotationCanvas({
   shapes,
   activeLevel,
   activeTool,
+  categoryEnglishName,
   onChange,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -113,6 +135,7 @@ export function AnnotationCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const polylinePointsRef = useRef<StrokePoint[]>([])
   const polylineCursorRef = useRef<StrokePoint | null>(null)
+  const lastPolylineClickMsRef = useRef(0)
   const boxStartRef = useRef<StrokePoint | null>(null)
   const boxPreviewRef = useRef<StrokePoint | null>(null)
   const [naturalSize, setNaturalSize] = useState({ w: 0, h: 0 })
@@ -146,6 +169,20 @@ export function AnnotationCanvas({
     for (const shape of shapes) {
       if (isPolylineLike(shape)) {
         drawPolyline(ctx, shape, scaleX)
+        if (
+          shape.kind === 'polyline' &&
+          shape.categoryEnglishName &&
+          shape.points.length > 0
+        ) {
+          drawCategoryLabel(
+            ctx,
+            shape.points[0],
+            shape.categoryEnglishName,
+            shape.level,
+            scaleX,
+            shape.width,
+          )
+        }
       } else {
         drawBox(ctx, shape, scaleX)
       }
@@ -163,6 +200,7 @@ export function AnnotationCanvas({
         scaleX,
         { dashed: Boolean(cursor && !previewClosed), showAnchors: true },
       )
+      drawCategoryLabel(ctx, draft[0], categoryEnglishName, activeLevel, scaleX, LINE_WIDTH)
     }
 
     const start = boxStartRef.current
@@ -183,7 +221,7 @@ export function AnnotationCanvas({
         true,
       )
     }
-  }, [shapes, scaleX, activeLevel, activeTool])
+  }, [shapes, scaleX, activeLevel, activeTool, categoryEnglishName])
 
   const finishPolyline = useCallback(
     (commit: boolean, closed = false) => {
@@ -200,13 +238,14 @@ export function AnnotationCanvas({
             points: [...pts],
             width: LINE_WIDTH,
             closed: closed || undefined,
+            categoryEnglishName,
           },
         ])
       } else {
         redraw()
       }
     },
-    [shapes, activeLevel, onChange, redraw],
+    [shapes, activeLevel, categoryEnglishName, onChange, redraw],
   )
 
   useEffect(() => {
@@ -293,18 +332,53 @@ export function AnnotationCanvas({
     redraw()
   }
 
+  const closePolylineLoop = useCallback(() => {
+    const draft = polylinePointsRef.current
+    if (draft.length >= 2) {
+      finishPolyline(true, true)
+    } else {
+      finishPolyline(false)
+    }
+  }, [finishPolyline])
+
+  const handleCanvasDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (activeTool !== 'polyline') return
+    const pt = toImageCoords(e.clientX, e.clientY)
+    if (!pt) return
+
+    const draft = polylinePointsRef.current
+    if (draft.length >= 1) {
+      const last = draft[draft.length - 1]!
+      if (pointDist(last, pt) > 2) {
+        polylinePointsRef.current.push(pt)
+      }
+    } else {
+      polylinePointsRef.current.push(pt)
+    }
+    polylineCursorRef.current = null
+    lastPolylineClickMsRef.current = e.timeStamp + 500
+    closePolylineLoop()
+  }
+
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (e.button !== 0 || e.ctrlKey || e.metaKey) return
     const pt = toImageCoords(e.clientX, e.clientY)
     if (!pt) return
 
     if (activeTool === 'polyline') {
+      if (e.timeStamp - lastPolylineClickMsRef.current < 400) {
+        return
+      }
+      lastPolylineClickMsRef.current = e.timeStamp
+
       const draft = polylinePointsRef.current
       if (
         draft.length >= 2 &&
         pointDist(draft[0], pt) <= closeSnapThreshold(LINE_WIDTH)
       ) {
-        finishPolyline(true, true)
+        closePolylineLoop()
         return
       }
       polylinePointsRef.current.push(pt)
@@ -371,6 +445,7 @@ export function AnnotationCanvas({
           <canvas
             ref={canvasRef}
             onClick={handleCanvasClick}
+            onDoubleClick={handleCanvasDoubleClick}
             onPointerMove={pointerMove}
             onPointerLeave={pointerLeave}
             style={{
